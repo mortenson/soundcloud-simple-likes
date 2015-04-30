@@ -1,0 +1,224 @@
+<script src="//rawgit.com/hoangnd25/cacheJS/master/dist/cacheJS.min.js"></script>
+<script src="//connect.soundcloud.com/sdk.js"></script>
+<script src="//cdnjs.cloudflare.com/ajax/libs/list.js/1.1.1/list.min.js"></script>
+<script src="//cdnjs.cloudflare.com/ajax/libs/jquery/2.1.3/jquery.min.js"></script>
+<script>
+    $(document).ready(function() {
+        currentSound = false;
+        // Init cache
+        cacheJS.use('localStorage');
+        // Init client
+        SC.initialize({
+            client_id: "",
+            redirect_uri: "http://drupal.dd:8088/soundcloud_auth.html"
+        });
+        // Init auth
+        SC.connect(function() {
+            $('#progress').text('Downloading your favorites...');
+            soundcloudGetRecursive('/me/favorites', processFavorites);
+        });
+        // Shuffle event
+        $('.shuffle').click(function() {
+            $('#progress').text('Shuffling your favorites...');
+            soundcloudGetRecursive('/me/favorites', processFavoritesShuffle);
+        });
+        // Reset event
+        $('.reset').click(function() {
+            $('#progress').text('Resetting filters...');
+            $('.search').val('');
+            soundcloudGetRecursive('/me/favorites', processFavorites);
+        });
+        // Callback to process favorites
+        function processFavorites(favorites, shuffle) {
+            $('#progress').text('');
+            $('.list').text('');
+            // Assemble the ListJS options parameter to provide default item markup
+            var options = {
+                valueNames: [ 'title', 'artist', 'likes', 'song_id' ],
+                item: '<li><button class="play">Play</button><div class="progress-wrapper"><div class="progress"></div></div></div><a target="_blank"><h3 class="title"></h3></a><p class="artist"></p><p class="likes"></p><div class="hidden song_id"></div><div class="hidden url"></div></li>'
+            };
+            // Create List instance
+            var userList = new List('songs', options);
+            // Before we start adding to the list, check if we need to shuffle results
+            if (shuffle != null) {
+                favorites.shuffle();
+            }
+            // Set the page to match out favorites (maybe this isn't a great idea for people with thousands of likes?)
+            userList.page = favorites.length;
+            for (var i=0;i<favorites.length;++i) {
+                userList.add({
+                    title: favorites[i].title,
+                    artist: favorites[i].user.username,
+                    likes: favorites[i].favoritings_count,
+                    song_id: favorites[i].id,
+                    url: favorites[i].permalink_url
+                });
+            }
+            // ListJS can only write content to the innerHTML of items, so we workaround that for the permalink
+            $('.list li').each(function() {
+                $(this).children('a').attr('href', $(this).children('.url').text());
+            });
+            // Re-apply the search filter if a user has shuffled after performing various filters
+            if (shuffle != null) {
+                userList.search($('.search').val());
+            }
+        }
+        // Callback to process the results of a soundcloud call with shuffle
+        function processFavoritesShuffle(favorites) {
+            processFavorites(favorites, true);
+        }
+        // Callback to get a soundcloud href and each related page
+        function soundcloudGetRecursive(path, callback, total_result, page) {
+            // On the first call, total result and page should be null
+            if (total_result == null) {
+                total_result = [];
+            }
+            if (page == null) {
+                page = 0;
+            }
+            // Get the next set of results from soundcloud
+            soundcloudGet(path, page * 50, function(result) {
+                // Check to see if this page has results
+                if (result && result.length > 0) {
+                    total_result.push.apply(total_result, result);
+                    soundcloudGetRecursive(path, callback, total_result, ++page);
+                }
+                // We're out of pages, call the final callback
+                else {
+                    callback(total_result);
+                }
+            });
+        }
+        // Callback to get and cache soundcloud requests
+        function soundcloudGet(path, offset, callback) {
+            // Attempt to pull a cached response of this soundcloud call
+            var cache = cacheJS.get({path:path,offset:offset});
+            // Cache doesn't exist, actually perform the request
+            if (cache == null) {
+                SC.get(path, {offset:offset}, function(result) {
+                    // Cache the result for this path+offset for one hour
+                    cache = cacheJS.set({path:path,offset:offset}, result, 3600);
+                    // Send the results to the callback
+                    callback(result);
+                });
+            }
+            // Cache exists, move onto the callback
+            else {
+                callback(cache);
+            }
+        }
+        // Play button logic
+        $('.list').on('click', '.play', function() {
+            // Check if this sound is already playing
+            var song_id = $(this).siblings('.song_id').text();
+            if (currentSound && currentSound.song_id == song_id) {
+                // Pause/play the currently playing sound
+                currentSound.togglePause();
+                return;
+            }
+            // These options are soundmanager2 callbacks
+            var options = {
+                onfinish: function(){
+                    // Filter is needed so we get exact results, as IDs increment and we may get something we don't want
+                    //  if we use a contains selector
+                    var song_id = this.song_id;
+                    var elem = $('.song_id').filter(
+                            function() {
+                                return this.innerHTML == song_id
+                            });
+                    // Play the next element in a very dom-centric way
+                    elem.parent().next().children('.play').trigger('click');
+                    // Reset progress bar widths
+                    $('.progress').css('width', '0');
+                },
+                whileplaying: function() {
+                    // Find the currently playing song
+                    var song_id = this.song_id;
+                    var progress = $('.song_id').filter(
+                            function() {
+                                return this.innerHTML == song_id
+                            }).siblings('.progress-wrapper').children('.progress');
+                    // Update the progress bar width
+                    progress.css('width', Math.floor((this.position/this.duration) * 100) + '%');
+                }
+            };
+            // Stream this song
+            SC.stream('/tracks/' + song_id, options, function(sound){
+                SC.streamStopAll();
+                sound.play();
+                sound.song_id = song_id;
+                currentSound = sound;
+                // Reset progress bar widths
+                $('.progress').css('width', '0');
+            });
+        });
+    });
+    // Add a shuffle function to the Array prototype because why not
+    // See http://stackoverflow.com/a/10142256 for original code
+    if (typeof Array.prototype.shuffle !== 'function') {
+        Array.prototype.shuffle = function() {
+            var i = this.length, j, temp;
+            if ( i == 0 ) return this;
+            while ( --i ) {
+                j = Math.floor( Math.random() * ( i + 1 ) );
+                temp = this[i];
+                this[i] = this[j];
+                this[j] = temp;
+            }
+            return this;
+        }
+    }
+</script>
+
+<style>
+    .hidden {
+        display:none;
+    }
+    .progress {
+        background-color:black;
+        height:10px;
+        width: 0;
+    }
+    .progress-wrapper {
+        width: 500px;
+        border: 1px dotted black;
+        display: inline-block;
+        margin-left: 10px;
+    }
+    .likes::after {
+        content: ' <3';
+    }
+    .attribution {
+        position: absolute;
+        top: 0;
+        right: 0;
+    }
+</style>
+
+<html>
+    <body>
+    <a target="_blank" class="attribution" href="http://soundcloud.com"><img src="/soundcloud-logo.png"></a>
+    <div id="songs">
+            <input class="search" placeholder="Search" />
+            <button class="sort" data-sort="title">
+                Sort by title
+            </button>
+            <button class="sort" data-sort="artist">
+                Sort by artist
+            </button>
+            <button class="sort" data-sort="likes">
+                Sort by likes
+            </button>
+            <button class="shuffle">
+                Shuffle
+            </button>
+            <button class="reset">
+                Reset Filters
+            </button>
+            <ul class="list"></ul>
+        </div>
+        <div id="progress">
+            Authenticating...
+        </div>
+    </body>
+</html>
