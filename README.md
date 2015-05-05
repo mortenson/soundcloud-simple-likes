@@ -9,8 +9,8 @@ Here's what it looks like:
 # Installation instructions
 
 1. Register a new App at http://soundcloud.com/you/apps
-1. Clone the repository to a random folder or into your webroot.
-1. Edit soundcloud.html and enter your App's Client ID under the `SC.initialize()` call.
+1. Clone the repository into your webroot.
+1. Edit soundcloud.html and enter your App's Client ID and the uri to soundcloud_auth.html under the `SC.initialize()` call.
 1. Visit soundcloud.html and authenticate using your credentials.
 1. Enjoy!
 
